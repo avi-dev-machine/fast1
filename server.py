@@ -292,25 +292,45 @@ class VideoProcessor:
         # Update situp-specific metrics
         self.metrics.update_situp_data(keypoints, angles, torso_inclination, hip_flexion, frame_time)
         
-        # State machine for counting
+        # State machine for sit-up counting
+        # rest -> ascending -> peak -> descending -> rest (rep complete)
+        
         if torso_inclination <= self.thresholds['situp']['down']:
+            # In rest/down position
+            if self.metrics.situp_state == 'descending':
+                # Completing a rep - only count here
+                if self.metrics.situp_peak_time is not None:
+                    eccentric_time = frame_time - self.metrics.situp_peak_time
+                    self.metrics.situp_eccentric_times.append(eccentric_time)
+                    self.metrics.situp_peak_time = None
+                
             self.metrics.situp_state = 'rest'
             self.stage = 'down'
+            
+            # Start new rep timer
             if self.metrics.situp_rep_start_time is None:
                 self.metrics.situp_rep_start_time = frame_time
         
         elif torso_inclination >= self.thresholds['situp']['up'] or \
              (hip_flexion is not None and hip_flexion <= self.thresholds['situp']['good_crunch']):
+            # At peak position
             if self.metrics.situp_state in ['rest', 'ascending']:
+                # Just reached peak - count the rep here
                 self.counter += 1
                 self.metrics.situp_state = 'peak'
                 self.stage = 'up'
+                
+                # Record concentric time
                 if self.metrics.situp_rep_start_time is not None:
                     concentric_time = frame_time - self.metrics.situp_rep_start_time
                     self.metrics.situp_concentric_times.append(concentric_time)
-                    self.metrics.situp_peak_time = frame_time
+                    self.metrics.situp_rep_start_time = None
+                
+                # Mark peak time for eccentric phase
+                self.metrics.situp_peak_time = frame_time
         
         else:
+            # Transitioning between states
             if self.metrics.situp_state == 'rest':
                 self.metrics.situp_state = 'ascending'
             elif self.metrics.situp_state == 'peak':
