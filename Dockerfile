@@ -17,9 +17,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Copy and install requirements (separate for better caching)
-COPY requirements_api.txt requirements.txt ./
+COPY requirements.txt ./
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir -r requirements_api.txt && \
     pip install --no-cache-dir -r requirements.txt && \
     pip cache purge
 
