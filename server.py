@@ -673,6 +673,51 @@ async def api_status():
         "active_sessions": len(sessions)
     }
 
+@app.post("/upload-video/")
+async def upload_video_simple(file: UploadFile = File(...), exercise_type: str = "pushup"):
+    """
+    Simple endpoint for uploading and analyzing exercise video in one call
+    """
+    # Create session
+    session_id = str(uuid.uuid4())
+    session_data = {
+        "session_id": session_id,
+        "exercise_type": exercise_type,
+        "created_at": datetime.now().isoformat(),
+        "status": "processing"
+    }
+    sessions[session_id] = session_data
+    
+    # Save uploaded file
+    session_dir = UPLOAD_DIR / session_id
+    session_dir.mkdir(exist_ok=True)
+    video_path = session_dir / file.filename
+    
+    with open(video_path, "wb") as f:
+        content = await file.read()
+        f.write(content)
+    
+    session_data["video_path"] = str(video_path)
+    
+    # Process video immediately
+    try:
+        processor = VideoProcessor(str(video_path), exercise_type)
+        results = processor.process_video()
+        
+        session_data["status"] = "completed"
+        session_data["results"] = results
+        
+        return {
+            "session_id": session_id,
+            "status": "completed",
+            "exercise_type": exercise_type,
+            "results": results
+        }
+    except Exception as e:
+        session_data["status"] = "error"
+        session_data["error"] = str(e)
+        raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
+
 @app.post("/session/create", response_model=SessionResponse)
 async def create_session():
     """
