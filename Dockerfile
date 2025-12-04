@@ -35,12 +35,10 @@ RUN mkdir -p uploads results
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
-    PORT=8000 \
-    HOST=0.0.0.0 \
     PYTHONDONTWRITEBYTECODE=1
 
 # Expose port
-EXPOSE 8000
+EXPOSE 7860
 
 # Run the application
-CMD uvicorn server:app --host $HOST --port $PORT --workers 1
+CMD uvicorn server:app --host 0.0.0.0 --port 7860 --workers 1
