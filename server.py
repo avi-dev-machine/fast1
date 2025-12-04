@@ -113,7 +113,7 @@ class VideoProcessor:
         }
         
         self.counter = 0
-        self.stage = None
+        self.stage = 'up'  # Start in UP state for squats like test.py
         self.start_time = None
         
         # Angle smoothing for stability
@@ -192,12 +192,13 @@ class VideoProcessor:
         )
         
         # Initialize stage if needed
-        if self.stage is None:
-            self.stage = 'up' if elbow > 130 else 'down'
+        if self.stage is None or self.stage == "" or self.stage == 'up':
+            # Start in UP position for pushups
+            self.stage = "UP" if elbow > 140 else "DOWN"
         
-        # State machine: up -> down -> up = 1 rep
+        # State machine: UP -> DOWN -> UP = 1 rep
         if elbow > self.thresholds['pushup']['up']:  # 140° - arms extended
-            if self.stage == 'down':
+            if self.stage in ('DOWN', 'down'):
                 self.counter += 1
                 is_good = hip and hip >= self.thresholds['pushup']['form_hip_min'] - 20
                 self.metrics.record_rep(
@@ -206,9 +207,9 @@ class VideoProcessor:
                     duration_seconds=1.0,
                     is_good_form=is_good
                 )
-            self.stage = 'up'
+            self.stage = 'UP'
         elif elbow < self.thresholds['pushup']['down']:  # 90° - arms bent
-            self.stage = 'down'
+            self.stage = 'DOWN'
     
     def _process_squat(self, angles, keypoints, frame_time):
         left_knee = angles.get('left_knee')
@@ -242,11 +243,23 @@ class VideoProcessor:
         
         # State machine: up -> down -> up = 1 rep
         if knee > self.thresholds['squat']['up']:  # 155° - standing
-            if self.stage == 'down':
+            if self.stage in ('down', 'DOWN'):  # Handle both cases
                 if self.metrics.rep_bottom_time is not None:
                     concentric_time = frame_time - self.metrics.rep_bottom_time
                     self.metrics.concentric_times.append(concentric_time)
+                    
+                    # Record sticking point if tracked
+                    if hasattr(self.metrics, 'min_velocity_angle') and self.metrics.min_velocity_angle is not None:
+                        if not hasattr(self.metrics, 'sticking_points'):
+                            self.metrics.sticking_points = []
+                        self.metrics.sticking_points.append(self.metrics.min_velocity_angle)
+                    
+                    # Reset for next rep
+                    if hasattr(self.metrics, 'min_velocity'):
+                        self.metrics.min_velocity = float('inf')
+                        self.metrics.min_velocity_angle = None
                     self.metrics.rep_bottom_time = None
+            
             self.stage = 'up'
             self.metrics.current_phase = 'standing'
             if self.metrics.rep_start_time is None:
@@ -254,7 +267,7 @@ class VideoProcessor:
         
         elif knee < self.thresholds['squat']['down']:  # 135° - squatting
             self.metrics.current_phase = 'descending'
-            if self.stage == 'up':
+            if self.stage in ('up', 'UP'):  # Handle both cases like test.py
                 self.stage = 'down'
                 self.counter += 1
                 self.metrics.current_phase = 'bottom'
@@ -328,6 +341,34 @@ class VideoProcessor:
                 
                 # Mark peak time for eccentric phase
                 self.metrics.situp_peak_time = frame_time
+                
+                # Evaluate form like test.py
+                good_rom = torso_inclination >= self.thresholds['situp']['up']
+                good_crunch = hip_flexion is not None and hip_flexion <= self.thresholds['situp']['good_crunch']
+                
+                if good_rom and good_crunch:
+                    self.metrics.good_reps += 1
+                    if hasattr(self.metrics, 'situp_valid_reps'):
+                        self.metrics.situp_valid_reps += 1
+                    is_good_form = True
+                elif good_rom:
+                    self.metrics.good_reps += 1
+                    if hasattr(self.metrics, 'situp_valid_reps'):
+                        self.metrics.situp_valid_reps += 1
+                    is_good_form = True
+                else:
+                    self.metrics.bad_reps += 1
+                    if hasattr(self.metrics, 'situp_short_rom_count'):
+                        self.metrics.situp_short_rom_count += 1
+                    is_good_form = False
+                
+                # Record rep
+                self.metrics.record_rep(
+                    rep_max=torso_inclination,
+                    rep_min=0,
+                    duration_seconds=1.0,
+                    is_good_form=is_good_form
+                )
         
         else:
             # Transitioning between states

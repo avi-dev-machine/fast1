@@ -1038,8 +1038,8 @@ class PerformanceMetrics:
             
             if self.vjump_state == 'standing':
                 # Detect takeoff directly (ankle Y decreases = person going up)
-                # Lowered threshold from 15px to 10px for earlier detection
-                if avg_ankle_y < self.vjump_ground_y - 10:
+                # Use stricter threshold to avoid false detections
+                if avg_ankle_y < self.vjump_ground_y - 25:  # Increased from 10 to 25px
                     self.vjump_state = 'airborne'
                     self.vjump_takeoff_time = current_time
                     self.vjump_min_ankle_y = avg_ankle_y
@@ -1075,16 +1075,16 @@ class PerformanceMetrics:
                     self.vjump_max_arm_angle = arm_angle
                 
                 # Detect landing (ankle returns near ground level)
-                # More lenient threshold - within 10px of ground
-                if avg_ankle_y > self.vjump_ground_y - 10:
+                # Stricter threshold to avoid false landings
+                if avg_ankle_y > self.vjump_ground_y - 15:  # Changed from 10 to 15px
                     self.vjump_state = 'landing'
                     
                     # Calculate jump metrics
                     if self.vjump_min_ankle_y is not None:
                         jump_height = self.vjump_ground_y - self.vjump_min_ankle_y
                         
-                        # Only count jumps with meaningful height (lowered from 15px to 10px)
-                        if jump_height >= 10:
+                        # Only count jumps with meaningful height (stricter threshold)
+                        if jump_height >= 30:  # Increased from 10px to 30px minimum
                             self.vjump_jump_heights.append(jump_height)
                             self.vjump_countermovement_depths.append(self.vjump_min_knee_angle)
                             self.vjump_arm_swing_angles.append(self.vjump_max_arm_angle)
