@@ -2,11 +2,9 @@
 fastapi
 uvicorn[standard]
 python-multipart
-opencv-python
+opencv-python-headless
 numpy
 ultralytics
-torch
-torchvision
 pillow
 pyyaml
 scipy
