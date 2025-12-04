@@ -102,8 +102,8 @@ class VideoProcessor:
         
         # Exercise thresholds
         self.thresholds = {
-            'pushup': {'down': 100, 'up': 150, 'form_hip_min': 130},
-            'squat': {'down': 115, 'up': 150, 'deep': 90},
+            'pushup': {'down': 90, 'up': 140, 'form_hip_min': 130},  # More lenient for camera angles
+            'squat': {'down': 135, 'up': 155, 'deep': 90},  # Simple fixed thresholds that work
             'situp': {'up': 70, 'down': 20, 'good_crunch': 50},
             'sitnreach': {'excellent_hip': 60, 'average_hip': 80, 'knee_valid': 165},
             'skipping': {'jump_threshold': 30, 'min_height': 20},
@@ -115,6 +115,32 @@ class VideoProcessor:
         self.counter = 0
         self.stage = None
         self.start_time = None
+        
+        # Angle smoothing for stability
+        self.last_elbow_angles = []
+        self.last_knee_angles = []
+    
+    def _smooth_elbow_angle(self, elbow_angle):
+        """Simple 3-frame moving average for elbow"""
+        if elbow_angle is None:
+            return None
+        self.last_elbow_angles.append(elbow_angle)
+        if len(self.last_elbow_angles) > 3:
+            self.last_elbow_angles.pop(0)
+        return int(sum(self.last_elbow_angles) / len(self.last_elbow_angles))
+    
+    def _smooth_knee_angle(self, knee_angle):
+        """Simple 3-frame moving average for knee"""
+        if knee_angle is None:
+            return None
+        self.last_knee_angles.append(knee_angle)
+        if len(self.last_knee_angles) > 3:
+            self.last_knee_angles.pop(0)
+        return int(sum(self.last_knee_angles) / len(self.last_knee_angles))
+        
+        # Angle smoothing for stability
+        self.last_elbow_angles = []
+        self.last_knee_angles = []
         
     def process_frame(self, frame, frame_time):
         """Process single frame with exercise-specific logic"""
@@ -147,84 +173,114 @@ class VideoProcessor:
         left_hip = angles.get('left_hip')
         right_hip = angles.get('right_hip')
         
+        # Use whichever side has valid angles
+        elbow = left_elbow if left_elbow else right_elbow
+        hip = left_hip if left_hip else right_hip
+        
+        if not elbow:
+            return
+        
+        # Apply smoothing
+        elbow = self._smooth_elbow_angle(elbow)
+        if not elbow:
+            return
+        
         # Update metrics with angle data
         self.metrics.update_angle_data(
             left_elbow, right_elbow, left_hip, right_hip,
             None, None, None, None, None, None, None, None
         )
         
-        elbow = left_elbow if left_elbow else right_elbow
-        hip = left_hip if left_hip else right_hip
+        # Initialize stage if needed
+        if self.stage is None:
+            self.stage = 'up' if elbow > 130 else 'down'
         
-        if elbow and hip:
-            if elbow > self.thresholds['pushup']['up']:
-                self.stage = 'up'
-            if elbow < self.thresholds['pushup']['down'] and self.stage == 'up':
-                self.stage = 'down'
+        # State machine: up -> down -> up = 1 rep
+        if elbow > self.thresholds['pushup']['up']:  # 140° - arms extended
+            if self.stage == 'down':
                 self.counter += 1
-                is_good = hip >= self.thresholds['pushup']['form_hip_min'] - 20
+                is_good = hip and hip >= self.thresholds['pushup']['form_hip_min'] - 20
                 self.metrics.record_rep(
                     rep_max=self.thresholds['pushup']['up'],
                     rep_min=elbow,
                     duration_seconds=1.0,
                     is_good_form=is_good
                 )
+            self.stage = 'up'
+        elif elbow < self.thresholds['pushup']['down']:  # 90° - arms bent
+            self.stage = 'down'
     
     def _process_squat(self, angles, keypoints, frame_time):
         left_knee = angles.get('left_knee')
         right_knee = angles.get('right_knee')
         knee = left_knee if left_knee else right_knee
         
-        if knee:
-            # Get additional angles
-            torso_angle = angles.get('torso_angle')
-            shin_angle_left = angles.get('shin_angle_left')
-            shin_angle_right = angles.get('shin_angle_right')
-            
-            # Use most confident shin angle
-            left_knee_conf = keypoints[13][2] if keypoints[13][2] else 0
-            right_knee_conf = keypoints[14][2] if keypoints[14][2] else 0
-            shin_angle = shin_angle_left if left_knee_conf > right_knee_conf else shin_angle_right
-            
-            # Update squat-specific metrics
-            self.metrics.update_squat_data(keypoints, angles, torso_angle, shin_angle, frame_time)
-            
-            # State machine
-            if knee > self.thresholds['squat']['up']:
-                if self.stage == 'down':
-                    if self.metrics.rep_bottom_time is not None:
-                        concentric_time = frame_time - self.metrics.rep_bottom_time
-                        self.metrics.concentric_times.append(concentric_time)
-                        self.metrics.rep_bottom_time = None
-                self.stage = 'up'
-                self.metrics.current_phase = 'standing'
-                if self.metrics.rep_start_time is None:
-                    self.metrics.rep_start_time = frame_time
-            
-            elif knee < self.thresholds['squat']['down']:
+        if not knee:
+            return
+        
+        # Apply smoothing
+        knee = self._smooth_knee_angle(knee)
+        if not knee:
+            return
+        
+        # Get additional angles
+        torso_angle = angles.get('torso_angle')
+        shin_angle_left = angles.get('shin_angle_left')
+        shin_angle_right = angles.get('shin_angle_right')
+        
+        # Use most confident shin angle
+        left_knee_conf = keypoints[13][2] if len(keypoints) > 13 else 0
+        right_knee_conf = keypoints[14][2] if len(keypoints) > 14 else 0
+        shin_angle = shin_angle_left if left_knee_conf > right_knee_conf else shin_angle_right
+        
+        # Update squat-specific metrics
+        self.metrics.update_squat_data(keypoints, angles, torso_angle, shin_angle, frame_time)
+        
+        # Initialize stage if needed
+        if self.stage is None:
+            self.stage = 'up'
+        
+        # State machine: up -> down -> up = 1 rep
+        if knee > self.thresholds['squat']['up']:  # 155° - standing
+            if self.stage == 'down':
+                if self.metrics.rep_bottom_time is not None:
+                    concentric_time = frame_time - self.metrics.rep_bottom_time
+                    self.metrics.concentric_times.append(concentric_time)
+                    self.metrics.rep_bottom_time = None
+            self.stage = 'up'
+            self.metrics.current_phase = 'standing'
+            if self.metrics.rep_start_time is None:
+                self.metrics.rep_start_time = frame_time
+        
+        elif knee < self.thresholds['squat']['down']:  # 135° - squatting
+            self.metrics.current_phase = 'descending'
+            if self.stage == 'up':
+                self.stage = 'down'
+                self.counter += 1
+                self.metrics.current_phase = 'bottom'
+                
+                if self.metrics.rep_start_time is not None:
+                    eccentric_time = frame_time - self.metrics.rep_start_time
+                    self.metrics.eccentric_times.append(eccentric_time)
+                    self.metrics.rep_bottom_time = frame_time
+                    self.metrics.rep_start_time = None
+                
+                # Record depth
+                self.metrics.squat_depths.append(knee)
+                
+                # Record rep
+                is_good = knee < self.thresholds['squat']['deep']
+                self.metrics.record_rep(
+                    rep_max=self.thresholds['squat']['up'],
+                    rep_min=knee,
+                    duration_seconds=1.0,
+                    is_good_form=is_good
+                )
+        else:
+            if self.stage == 'up':
                 self.metrics.current_phase = 'descending'
-                if self.stage == 'up':
-                    self.stage = 'down'
-                    self.counter += 1
-                    self.metrics.current_phase = 'bottom'
-                    if self.metrics.rep_start_time is not None:
-                        eccentric_time = frame_time - self.metrics.rep_start_time
-                        self.metrics.eccentric_times.append(eccentric_time)
-                        self.metrics.rep_bottom_time = frame_time
-                    
-                    # Record rep
-                    is_good = knee < self.thresholds['squat']['deep']
-                    self.metrics.record_rep(
-                        rep_max=self.thresholds['squat']['up'],
-                        rep_min=knee,
-                        duration_seconds=1.0,
-                        is_good_form=is_good
-                    )
-            else:
-                if self.stage == 'up':
-                    self.metrics.current_phase = 'descending'
-                elif self.stage == 'down':
-                    self.metrics.current_phase = 'ascending'
+            elif self.stage == 'down':
+                self.metrics.current_phase = 'ascending'
     
     def _process_situp(self, angles, keypoints, frame_time):
         torso_inclination = angles.get('torso_inclination_horizontal')

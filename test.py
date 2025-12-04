@@ -15,14 +15,17 @@ class ExerciseEvaluator:
         # Exercise State Variables
         self.current_exercise = None
         self.counter = 0
-        self.stage = None
+        self.stage = "up"  # Start in UP state for squats
         self.feedback = "Setup"
         self.start_time = None
         
-        # Thresholds (Degrees) - Adjusted for different camera angles
+        # Simple moving average for smoothing (last 3 frames)
+        self.last_knee_angles = []
+        
+        # Thresholds - SIMPLE and WORKING
         self.thresholds = {
-            'pushup': {'down': 100, 'up': 150, 'form_hip_min': 130},  # More lenient
-            'squat': {'down': 115, 'up': 150, 'deep': 90},  # More lenient
+            'pushup': {'down': 90, 'up': 140, 'form_hip_min': 130},  # More lenient for camera angles
+            'squat': {'down': 135, 'up': 155, 'deep': 90},  # Simple fixed thresholds that work
             'situp': {'up': 70, 'down': 20, 'good_crunch': 50},
             'sitnreach': {'excellent_hip': 60, 'average_hip': 80, 'knee_valid': 165},
             'skipping': {'jump_threshold': 30, 'min_height': 20},
@@ -30,6 +33,31 @@ class ExerciseEvaluator:
             'vjump': {'min_height': 30, 'good_countermovement': 110},
             'bjump': {'min_distance': 50, 'good_countermovement': 110}
         }
+    
+    def _smooth_knee_angle(self, knee_angle):
+        """Simple 3-frame moving average"""
+        if knee_angle is None:
+            return None
+        
+        self.last_knee_angles.append(knee_angle)
+        if len(self.last_knee_angles) > 3:
+            self.last_knee_angles.pop(0)
+        
+        return int(np.mean(self.last_knee_angles))
+    
+    def _smooth_elbow_angle(self, elbow_angle):
+        """Simple 3-frame moving average for elbow"""
+        if elbow_angle is None:
+            return None
+        
+        if not hasattr(self, 'last_elbow_angles'):
+            self.last_elbow_angles = []
+        
+        self.last_elbow_angles.append(elbow_angle)
+        if len(self.last_elbow_angles) > 3:
+            self.last_elbow_angles.pop(0)
+        
+        return int(np.mean(self.last_elbow_angles))
 
     def _draw_dashboard(self, frame, exercise_name):
         """Draws the exercise statistics overlay."""
@@ -201,6 +229,16 @@ class ExerciseEvaluator:
             self.feedback = "⚠ Position yourself so arms are visible"
             return
         
+        # Apply smoothing to elbow angle
+        elbow_raw = elbow
+        elbow = self._smooth_elbow_angle(elbow)
+        if elbow is None:
+            return
+        
+        # Debug: Print angle and stage (only first few to avoid spam)
+        if self.counter <= 3:
+            print(f"Elbow: {elbow}°, Stage: {self.stage}, Thresholds: UP>{self.thresholds['pushup']['up']}, DOWN<{self.thresholds['pushup']['down']}")
+        
         if hip is None:
             # If hip not visible, just track elbow movement
             hip = 160  # Assume good form if not visible
@@ -212,30 +250,36 @@ class ExerciseEvaluator:
             None, None, None, None, None, None, None, None
         )
 
-        # Relaxed form check for different angles
-        if hip < self.thresholds['pushup']['form_hip_min'] - 20:  # More lenient
+        # Form check
+        if hip < self.thresholds['pushup']['form_hip_min'] - 20:
             self.feedback = "Fix Back!"
-            self.metrics.bad_form_count += 1
         else:
             self.feedback = "Good Form"
 
-        # Detect pushup motion - thresholds already adjusted in __init__
-        if elbow > self.thresholds['pushup']['up']:  # 150°
+        # Initialize stage if needed
+        if self.stage is None or self.stage == "":
+            # Start in UP position for pushups
+            self.stage = "UP" if elbow > 140 else "DOWN"
+
+        # State machine: UP -> DOWN -> UP = 1 rep
+        if elbow > self.thresholds['pushup']['up']:  # 140° - arms extended
+            if self.stage == "DOWN":
+                # Completed a rep
+                self.counter += 1
+                is_good = (self.feedback == "Good Form")
+                self.metrics.record_rep(
+                    rep_max=self.thresholds['pushup']['up'],
+                    rep_min=elbow,
+                    duration_seconds=1.0,
+                    is_good_form=is_good
+                )
+                print(f"✓ Pushup Rep {self.counter} (Elbow: {elbow}°)")
             self.stage = "UP"
         
-        if elbow < self.thresholds['pushup']['down'] and self.stage == 'UP':  # 100°
+        elif elbow < self.thresholds['pushup']['down']:  # 90° - arms bent
+            if self.stage != "DOWN":
+                print(f"  → Going down (Elbow: {elbow}°)")
             self.stage = "DOWN"
-            self.counter += 1
-            
-            is_good = (self.feedback == "Good Form")
-            self.metrics.record_rep(
-                rep_max=self.thresholds['pushup']['up'],
-                rep_min=elbow,
-                duration_seconds=1.0,
-                is_good_form=is_good
-            )
-            
-            print(f"Pushup Count: {self.counter}")
 
     def process_squat(self, angles, keypoints):
         """Logic for Squats - works from multiple camera angles"""
@@ -258,7 +302,12 @@ class ExerciseEvaluator:
             self.feedback = "⚠ Move back - show full body"
             return
         
-        # Get current time for velocity and tempo calculations
+        # Simple smoothing (3-frame average)
+        knee = self._smooth_knee_angle(knee)
+        if knee is None:
+            return
+        
+        # Get current time
         current_time = time.time()
         
         # Extract additional angles (calculated by utils.py)
@@ -277,8 +326,8 @@ class ExerciseEvaluator:
         # Update squat-specific metrics
         self.metrics.update_squat_data(keypoints, angles, torso_angle, shin_angle, current_time)
         
-        # State machine for rep counting with adjusted thresholds
-        if knee > self.thresholds['squat']['up']:  # 150°
+        # Simple state machine: UP -> DOWN -> UP = 1 rep
+        if knee > self.thresholds['squat']['up']:  # 155° - standing
             if self.stage == "DOWN":
                 # Completing a rep - record concentric time
                 if self.metrics.rep_bottom_time is not None:
@@ -301,10 +350,10 @@ class ExerciseEvaluator:
             if self.metrics.rep_start_time is None:
                 self.metrics.rep_start_time = current_time
         
-        elif knee < self.thresholds['squat']['down']:  # 115°
+        elif knee < self.thresholds['squat']['down']:  # 135° - squatting
             self.metrics.current_phase = 'descending'
             
-            if self.stage == 'UP':
+            if self.stage == "UP" or self.stage == "up":
                 # Reached bottom of squat
                 self.stage = "DOWN"
                 self.counter += 1
@@ -327,11 +376,9 @@ class ExerciseEvaluator:
                 # Evaluate form
                 if knee < self.thresholds['squat']['deep']:
                     self.feedback = "Great Depth!"
-                    self.metrics.good_reps += 1
                     is_good_form = True
                 else:
                     self.feedback = "Go Lower"
-                    self.metrics.bad_reps += 1
                     is_good_form = False
                 
                 # Check torso angle
