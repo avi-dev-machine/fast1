@@ -721,8 +721,8 @@ async def upload_video_simple(file: UploadFile = File(...), exercise_type: str =
     
     # Process video immediately
     try:
-        processor = VideoProcessor(str(video_path), exercise_type)
-        results = processor.process_video()
+        processor = VideoProcessor(session_id, exercise_type, str(video_path))
+        results = processor.analyze_video()
         
         session_data["status"] = "completed"
         session_data["results"] = results
