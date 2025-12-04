@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 
@@ -449,9 +449,219 @@ class VideoProcessor:
 # API ENDPOINTS
 # ===========================
 
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 async def root():
-    """API health check"""
+    """API health check with web interface"""
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>AI Exercise Trainer</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                max-width: 1200px;
+                margin: 0 auto;
+                padding: 20px;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+            }
+            .container {
+                background: rgba(255,255,255,0.95);
+                padding: 30px;
+                border-radius: 10px;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                color: #333;
+            }
+            h1 { color: #667eea; margin-top: 0; }
+            .status { 
+                background: #10b981; 
+                color: white; 
+                padding: 10px 20px; 
+                border-radius: 5px; 
+                display: inline-block;
+                margin: 10px 0;
+            }
+            .exercises {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                gap: 10px;
+                margin: 20px 0;
+            }
+            .exercise-tag {
+                background: #667eea;
+                color: white;
+                padding: 10px;
+                border-radius: 5px;
+                text-align: center;
+            }
+            .upload-section {
+                margin: 30px 0;
+                padding: 20px;
+                border: 2px dashed #667eea;
+                border-radius: 10px;
+                text-align: center;
+            }
+            input[type="file"] {
+                margin: 10px 0;
+            }
+            select, button {
+                padding: 10px 20px;
+                margin: 10px 5px;
+                border-radius: 5px;
+                border: none;
+                font-size: 16px;
+            }
+            button {
+                background: #667eea;
+                color: white;
+                cursor: pointer;
+            }
+            button:hover {
+                background: #5568d3;
+            }
+            .result {
+                margin-top: 20px;
+                padding: 20px;
+                background: #f3f4f6;
+                border-radius: 5px;
+                display: none;
+            }
+            .info-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 15px;
+                margin: 20px 0;
+            }
+            .info-card {
+                background: #f8f9fa;
+                padding: 15px;
+                border-radius: 5px;
+                border-left: 4px solid #667eea;
+            }
+            .info-label { font-weight: bold; color: #667eea; }
+            .info-value { font-size: 24px; margin-top: 5px; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>💪 AI Exercise Trainer</h1>
+            <div class="status">🟢 API Online</div>
+            
+            <div class="info-grid">
+                <div class="info-card">
+                    <div class="info-label">Version</div>
+                    <div class="info-value">2.0</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-label">Model</div>
+                    <div class="info-value">YOLO11n-pose</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-label">Active Sessions</div>
+                    <div class="info-value" id="sessions">0</div>
+                </div>
+            </div>
+
+            <h2>Supported Exercises</h2>
+            <div class="exercises">
+                <div class="exercise-tag">💪 Pushup</div>
+                <div class="exercise-tag">🏋️ Squat</div>
+                <div class="exercise-tag">🤸 Situp</div>
+                <div class="exercise-tag">🧘 Sit & Reach</div>
+                <div class="exercise-tag">🪢 Skipping</div>
+                <div class="exercise-tag">🤾 Jumping Jacks</div>
+                <div class="exercise-tag">⬆️ Vertical Jump</div>
+                <div class="exercise-tag">➡️ Broad Jump</div>
+            </div>
+
+            <div class="upload-section">
+                <h2>Test Exercise Analysis</h2>
+                <input type="file" id="videoFile" accept="video/*">
+                <br>
+                <select id="exerciseType">
+                    <option value="pushup">Pushup</option>
+                    <option value="squat">Squat</option>
+                    <option value="situp">Situp</option>
+                    <option value="sitnreach">Sit & Reach</option>
+                    <option value="skipping">Skipping</option>
+                    <option value="jumpingjacks">Jumping Jacks</option>
+                    <option value="vjump">Vertical Jump</option>
+                    <option value="bjump">Broad Jump</option>
+                </select>
+                <br>
+                <button onclick="uploadVideo()">Analyze Video</button>
+                <div id="loading" style="display:none; margin-top:10px;">
+                    <p>⏳ Analyzing video...</p>
+                </div>
+            </div>
+
+            <div class="result" id="result">
+                <h3>Analysis Result</h3>
+                <pre id="resultData"></pre>
+            </div>
+
+            <h2>API Endpoints</h2>
+            <div class="info-card">
+                <p><strong>POST /upload-video/</strong> - Upload and analyze exercise video</p>
+                <p><strong>GET /</strong> - API status and info</p>
+                <p><strong>GET /docs</strong> - API documentation (if enabled)</p>
+            </div>
+        </div>
+
+        <script>
+            // Update active sessions
+            fetch('/api/status')
+                .then(r => r.json())
+                .then(data => {
+                    if(data.active_sessions !== undefined) {
+                        document.getElementById('sessions').textContent = data.active_sessions;
+                    }
+                })
+                .catch(() => {});
+
+            async function uploadVideo() {
+                const fileInput = document.getElementById('videoFile');
+                const exerciseType = document.getElementById('exerciseType').value;
+                const loading = document.getElementById('loading');
+                const result = document.getElementById('result');
+                const resultData = document.getElementById('resultData');
+
+                if (!fileInput.files[0]) {
+                    alert('Please select a video file');
+                    return;
+                }
+
+                const formData = new FormData();
+                formData.append('file', fileInput.files[0]);
+                formData.append('exercise_type', exerciseType);
+
+                loading.style.display = 'block';
+                result.style.display = 'none';
+
+                try {
+                    const response = await fetch('/upload-video/', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    const data = await response.json();
+                    loading.style.display = 'none';
+                    result.style.display = 'block';
+                    resultData.textContent = JSON.stringify(data, null, 2);
+                } catch (error) {
+                    loading.style.display = 'none';
+                    alert('Error: ' + error.message);
+                }
+            }
+        </script>
+    </body>
+    </html>
+    """
+
+@app.get("/api/status")
+async def api_status():
+    """API status endpoint for web interface"""
     return {
         "status": "online",
         "service": "AI Exercise Trainer API",
