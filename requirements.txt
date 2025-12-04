@@ -1,7 +1,4 @@
 # Core Dependencies for AI Exercise Trainer
-fastapi
-uvicorn[standard]
-python-multipart
 opencv-python-headless
 numpy
 ultralytics
